@@ -1,0 +1,14 @@
+{
+  "name": "recipe-tools",
+  "description": "Claude Code plugins for collecting recipes from food websites.",
+  "owner": {
+    "name": "omerozaltan"
+  },
+  "plugins": [
+    {
+      "name": "recipe-scraper",
+      "source": "./",
+      "description": "Scrape every recipe from a food website with schema.org data plus Claude, export CSV and upsert SQL."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "recipe-scraper",
+  "displayName": "Recipe Scraper",
+  "version": "0.2.0",
+  "description": "Scrape every recipe from a food website. Reads schema.org recipe data where sites publish it and uses Claude for the rest: picking sitemaps, classifying pages, extracting recipes without structured data, and cleaning titles. Exports CSV and upsert SQL.",
+  "author": {
+    "name": "omerozaltan"
+  },
+  "homepage": "https://github.com/omerozaltan/recipe-scraper",
+  "repository": "https://github.com/omerozaltan/recipe-scraper",
+  "license": "MIT",
+  "keywords": ["recipes", "scraper", "food", "schema.org", "supabase"]
+}

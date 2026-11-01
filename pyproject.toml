@@ -1,0 +1,23 @@
+[project]
+name = "recipe-scraper"
+version = "0.2.0"
+description = "LLM-assisted recipe scraper that uses the local Claude Code CLI"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "extruct>=0.17",
+    "lxml>=5.0",
+    "pydantic>=2.7",
+    "trafilatura>=1.12",
+]
+
+[project.scripts]
+recipe-scraper = "recipe_scraper.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
