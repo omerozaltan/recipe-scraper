@@ -1,14 +1,12 @@
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-from . import config, db, llm_extract, titles
+from . import config, db, export as export_mod, llm_extract, supabase, titles
 from .claude_cli import BudgetExhausted, ClaudeError
 from .discover import discover
-from .export import export
 from .extract import parse_page
 from .fetch import Fetcher, RobotsDisallowed, fetch_page, html_path
 
@@ -27,6 +25,7 @@ def discover_step(site: str, url_pattern: str | None = None, since: str | None =
         urls, disallowed = discover(fetcher, site_url(site))
     total = len(urls)
     if url_pattern:
+        import re
         regex = re.compile(url_pattern)
         urls = [(u, m) for u, m in urls if regex.search(u)]
     if since:
@@ -39,9 +38,10 @@ def discover_step(site: str, url_pattern: str | None = None, since: str | None =
     print(f"[discover] {added} new, {changed} changed since last run")
 
 
-def fetch_step(site: str, limit: int | None) -> None:
+def fetch_step(site: str, limit: int | None, url_pattern: str | None = None,
+               since: str | None = None) -> None:
     key = site_key(site)
-    pages = db.pages_by_status(key, "discovered", limit)
+    pages = db.pages_by_status(key, "discovered", limit, url_pattern, since)
     print(f"[fetch] {len(pages)} pages (~{len(pages) * config.REQUEST_DELAY:.0f}s at {config.REQUEST_DELAY}s/request)")
     with Fetcher() as fetcher:
         for n, page in enumerate(pages, 1):
@@ -59,19 +59,31 @@ def fetch_step(site: str, limit: int | None) -> None:
                 print(f"[fetch] {n}/{len(pages)}")
 
 
-def extract_step(site: str, limit: int | None) -> None:
+def extract_step(site: str, limit: int | None, url_pattern: str | None = None,
+                 since: str | None = None) -> None:
     key = site_key(site)
-    pages = db.pages_by_status(key, "fetched", limit)
+    pages = db.pages_by_status(key, "fetched", limit, url_pattern, since)
     print(f"[extract] {len(pages)} pages")
-    needs_llm = []
+    needs_llm, broken = [], 0
     for page in pages:
-        rec = parse_page(html_path(page["url"]).read_text("utf-8"))
+        try:
+            rec = parse_page(html_path(page["url"]).read_text("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            # A cached file that has gone missing, or markup the parsers choke on. Marking
+            # the page failed keeps the rest of the queue moving: letting this escape would
+            # abort the step, and the same page would abort it again on every later run.
+            db.set_page(page["url"], status="failed", error=f"{type(e).__name__}: {e}"[:500])
+            print(f"[extract] unreadable, marked failed: {page['url']} ({type(e).__name__})")
+            broken += 1
+            continue
         if rec is None:
             needs_llm.append(page)
             continue
         db.save_recipe(key, page["url"], rec)
         db.set_page(page["url"], status="extracted", page_type="recipe", error=None)
-    print(f"[extract] {len(pages) - len(needs_llm)} recipes from schema.org data, {len(needs_llm)} pages go to Claude")
+    done = len(pages) - len(needs_llm) - broken
+    print(f"[extract] {done} recipes from schema.org data, {len(needs_llm)} pages go to Claude"
+          + (f", {broken} unreadable" if broken else ""))
 
     deferred = 0
     with ThreadPoolExecutor(config.LLM_CONCURRENCY) as pool:
@@ -83,7 +95,7 @@ def extract_step(site: str, limit: int | None) -> None:
             except BudgetExhausted:
                 deferred += 1  # stays 'fetched' and is picked up by the next run
                 continue
-            except ClaudeError as e:
+            except (ClaudeError, OSError) as e:
                 db.set_page(url, status="failed", error=str(e)[:500])
                 print(f"[extract] {n}/{len(futures)} FAILED {url}: {e}")
                 continue
@@ -124,10 +136,56 @@ def titles_step(site: str) -> None:
 
 
 def export_step(site: str, table: str, out_dir: Path | None) -> None:
-    csv_path, sql_path, count, problems = export(site_key(site), out_dir or config.EXPORT_DIR, table)
-    for p in problems:
+    result = export_mod.export(site_key(site), out_dir or config.EXPORT_DIR, table)
+    for p in result.problems:
         print(f"[export] skipped {p}")
-    print(f"[export] {count} recipes ->\n  {csv_path}\n  {sql_path}")
+    if result.untitled:
+        print(f"[export] WARNING: {result.untitled} recipes have no cleaned title and were "
+              f"exported under the title the site published. Run `recipe-scraper titles {site}` "
+              "and export again to clean them.")
+    print(f"[export] {result.count} recipes ->\n  {result.csv_path}\n  {result.sql_path}")
+
+
+def push_step(site: str, table: str, limit: int | None, dry_run: bool, allow_untitled: bool) -> None:
+    """Send recipes to the remote table, skipping source_urls it already holds."""
+    key = site_key(site)
+    rows, problems, untitled = export_mod.to_rows(key)
+    for p in problems:
+        print(f"[push] skipped {p}")
+    if untitled and not allow_untitled:
+        raise RuntimeError(
+            f"{untitled} of {len(rows)} recipes have no cleaned title. Run "
+            f"`recipe-scraper titles {site}` first, or pass --allow-untitled to send them "
+            "under the title the site published."
+        )
+
+    target = supabase.from_env(table)
+    print(f"[push] {target}")
+    with supabase.client(target) as http:
+        before = supabase.row_count(target, http)
+        existing = supabase.existing_source_urls(target, http)
+        already = [r for r in rows if r.source_url in existing]
+        pending = [r for r in rows if r.source_url not in existing]
+        print(f"[push] table holds {before} rows; {len(already)} of this site's "
+              f"{len(rows)} recipes are already there, {len(pending)} are new")
+        if already:
+            db.mark_pushed([r.source_url for r in already])
+        if limit:
+            pending = pending[:limit]
+            print(f"[push] sending {len(pending)} (--limit)")
+        if dry_run:
+            print("[push] dry run, nothing sent")
+            return
+        if not pending:
+            return
+
+        sent = 0
+        for batch in supabase.insert(target, http, pending):
+            # Recorded per batch, so an interruption does not re-send what landed.
+            db.mark_pushed([r.source_url for r in batch])
+            sent += len(batch)
+            print(f"[push] {sent}/{len(pending)}")
+        print(f"[push] done, table now holds {supabase.row_count(target, http)} rows")
 
 
 def estimate(site: str) -> dict:

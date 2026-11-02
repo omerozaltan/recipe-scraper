@@ -3,7 +3,7 @@ import shutil
 import sys
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 def _default_data_dir() -> Path:

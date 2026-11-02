@@ -1,6 +1,6 @@
 [project]
 name = "recipe-scraper"
-version = "0.2.0"
+version = "0.3.0"
 description = "LLM-assisted recipe scraper that uses the local Claude Code CLI"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,9 +15,16 @@ dependencies = [
 [project.scripts]
 recipe-scraper = "recipe_scraper.cli:main"
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
