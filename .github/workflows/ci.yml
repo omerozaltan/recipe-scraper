@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e '.[dev]'
+      - run: pytest -q
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The plugin is unloadable if either manifest is malformed, and nothing else
+      # in CI would notice.
+      - run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" && echo "ok $f"
+          done
+      - run: |
+          python3 - <<'PY'
+          import json, pathlib, sys
+          plugin = json.loads(pathlib.Path(".claude-plugin/plugin.json").read_text())
+          pyproject = pathlib.Path("pyproject.toml").read_text()
+          version = plugin["version"]
+          if f'version = "{version}"' not in pyproject:
+              sys.exit(f"plugin.json says {version}, pyproject.toml disagrees")
+          src = pathlib.Path("src/recipe_scraper/config.py").read_text()
+          if f'VERSION = "{version}"' not in src:
+              sys.exit(f"plugin.json says {version}, config.py disagrees")
+          print(f"ok version {version} agrees in all three places")
+          PY

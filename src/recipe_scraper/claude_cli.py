@@ -54,9 +54,11 @@ def ask(task: str, prompt: str, system: str, schema: type[T], model: str, retrie
     if cache_file.exists():
         return schema.model_validate_json(cache_file.read_text("utf-8"))
 
-    _take_budget()
     last_error: Exception | None = None
     for attempt in range(retries + 1):
+        # Each attempt is its own `claude -p` process, so each one costs a call.
+        # Counting only the first would let --max-llm-calls overshoot threefold.
+        _take_budget()
         started = time.monotonic()
         try:
             data, meta = _run(prompt, system, schema_json, model)

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from . import claude_cli, config
+from . import claude_cli, config, supabase
 
 
 class Pong(BaseModel):
@@ -44,6 +44,18 @@ def run(check_llm: bool = True) -> bool:
         report(True, "data dir", str(config.DATA_DIR))
     except OSError as e:
         report(False, "data dir", f"{config.DATA_DIR}: {e}")
+
+    # Pushing is optional, so an unconfigured target is information rather than a failure.
+    try:
+        target = supabase.from_env()
+    except supabase.SupabaseError as e:
+        print(f"[info] supabase push not configured: {e}")
+    else:
+        try:
+            with supabase.client(target) as http:
+                report(True, "supabase", f"{target}, {supabase.row_count(target, http)} rows readable")
+        except (supabase.SupabaseError, OSError) as e:
+            report(False, "supabase", str(e))
 
     if check_llm and found:
         try:

@@ -71,6 +71,12 @@ class Fetcher:
                     time.sleep(float(resp.headers.get("Retry-After", 10 * (attempt + 1))))
                     continue
             resp.raise_for_status()
+            # The client follows redirects, so the page we actually got may be at a URL
+            # robots.txt forbids -- possibly on another host, whose robots.txt we have
+            # not read yet. Check where we landed, not only where we asked.
+            final = str(resp.url)
+            if final != url and not self.allowed(final):
+                raise RobotsDisallowed(final)
             return resp
         raise AssertionError("unreachable")
 
